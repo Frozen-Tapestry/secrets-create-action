@@ -74,7 +74,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(cat .ci-secrets/key1)" = "value 1"
+          test "$(cat .ci-secrets/key1)" = " value 1"
           test "$(cat .ci-secrets/key2)" = "  value 2"  # leading spaces after '=' are preserved
 
   success-custom-dir:
