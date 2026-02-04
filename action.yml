@@ -9,8 +9,8 @@ inputs:
       Multiline list of key=value lines.
       key becomes filename under the secret dir.
       Example:
-        nexus_user=${{ secrets.NEXUS_USER }}
-        nexus_password=${{ secrets.NEXUS_PASSWORD }}
+        secret_name1=secret_value1
+        secret_name2=secret_value2
     required: true
   dir:
     description: "Directory to write secret files into"
