@@ -1,0 +1,269 @@
+name: test-project-secrets-create
+
+on:
+  push:
+    branches:
+      - prime
+      - develop
+  pull_request_review:
+    types: [submitted]
+
+jobs:
+  success-default-dir:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Prepare .dockerignore
+        run: |
+          printf '%s\n' '.ci-secrets' > .dockerignore
+
+      - name: Run action (default dir, allow current owner)
+        id: act
+        uses: ./
+        with:
+          owner: "${{ runner.uid }}:${{ runner.gid }}"
+          pairs: |
+            nexus_user=alice
+            nexus_password=supersecret
+
+      - name: Assert files created and permissions sane
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -d .ci-secrets
+          test -f .ci-secrets/nexus_user
+          test -f .ci-secrets/nexus_password
+
+          test "$(cat .ci-secrets/nexus_user)" = "alice"
+          test "$(cat .ci-secrets/nexus_password)" = "supersecret"
+
+          # umask 077 => files should not be group/world-readable
+          perms_user="$(stat -c '%a' .ci-secrets/nexus_user)"
+          perms_pass="$(stat -c '%a' .ci-secrets/nexus_password)"
+          case "$perms_user" in
+            600|400|700) : ;;
+            *) echo "Unexpected perms for nexus_user: $perms_user"; exit 1 ;;
+          esac
+          case "$perms_pass" in
+            600|400|700) : ;;
+            *) echo "Unexpected perms for nexus_password: $perms_pass"; exit 1 ;;
+          esac
+
+  success-trimming-comments-empty-lines:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Prepare .dockerignore
+        run: |
+          printf '%s\n' '.ci-secrets' > .dockerignore
+
+      - name: Run action (comments + whitespace)
+        uses: ./
+        with:
+          owner: "${{ runner.uid }}:${{ runner.gid }}"
+          pairs: |
+            
+            # comment
+              key1 = value 1
+            key2=  value 2  
+
+      - name: Assert parsing behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(cat .ci-secrets/key1)" = "value 1"
+          test "$(cat .ci-secrets/key2)" = "  value 2"  # leading spaces after '=' are preserved
+
+  success-custom-dir:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Prepare .dockerignore
+        run: |
+          printf '%s\n' 'secrets-dir' > .dockerignore
+
+      - name: Run action (custom dir)
+        uses: ./
+        with:
+          dir: secrets-dir
+          owner: "${{ runner.uid }}:${{ runner.gid }}"
+          pairs: |
+            token=abc123
+
+      - name: Assert files created
+        run: |
+          set -euo pipefail
+          test -f secrets-dir/token
+          test "$(cat secrets-dir/token)" = "abc123"
+
+  fail-missing-dockerignore:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Ensure no .dockerignore
+        run: |
+          rm -f .dockerignore
+
+      - name: Run action (expect failure)
+        id: act
+        continue-on-error: true
+        uses: ./
+        with:
+          owner: "${{ runner.uid }}:${{ runner.gid }}"
+          pairs: |
+            a=b
+
+      - name: Assert failed
+        run: |
+          test "${{ steps.act.outcome }}" = "failure"
+
+  fail-dockerignore-missing-entry:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Prepare .dockerignore (wrong entry)
+        run: |
+          printf '%s\n' 'not-the-dir' > .dockerignore
+
+      - name: Run action (expect failure)
+        id: act
+        continue-on-error: true
+        uses: ./
+        with:
+          owner: "${{ runner.uid }}:${{ runner.gid }}"
+          pairs: |
+            a=b
+
+      - name: Assert failed
+        run: |
+          test "${{ steps.act.outcome }}" = "failure"
+
+  fail-unsafe-dir-path:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Prepare .dockerignore
+        run: |
+          printf '%s\n' '.ci-secrets' > .dockerignore
+
+      - name: Absolute path (expect failure)
+        id: abs
+        continue-on-error: true
+        uses: ./
+        with:
+          dir: /tmp/ci-secrets
+          owner: "${{ runner.uid }}:${{ runner.gid }}"
+          pairs: |
+            a=b
+
+      - name: Path traversal (expect failure)
+        id: trav
+        continue-on-error: true
+        uses: ./
+        with:
+          dir: ../ci-secrets
+          owner: "${{ runner.uid }}:${{ runner.gid }}"
+          pairs: |
+            a=b
+
+      - name: Assert failed
+        run: |
+          test "${{ steps.abs.outcome }}" = "failure"
+          test "${{ steps.trav.outcome }}" = "failure"
+
+  fail-invalid-key:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Prepare .dockerignore
+        run: |
+          printf '%s\n' '.ci-secrets' > .dockerignore
+
+      - name: Run action with invalid filename key (expect failure)
+        id: act
+        continue-on-error: true
+        uses: ./
+        with:
+          owner: "${{ runner.uid }}:${{ runner.gid }}"
+          pairs: |
+            bad/key=value
+
+      - name: Assert failed
+        run: |
+          test "${{ steps.act.outcome }}" = "failure"
+
+  fail-invalid-line-missing-equals:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Prepare .dockerignore
+        run: |
+          printf '%s\n' '.ci-secrets' > .dockerignore
+
+      - name: Run action with invalid pairs line (expect failure)
+        id: act
+        continue-on-error: true
+        uses: ./
+        with:
+          owner: "${{ runner.uid }}:${{ runner.gid }}"
+          pairs: |
+            no_equals_here
+
+      - name: Assert failed
+        run: |
+          test "${{ steps.act.outcome }}" = "failure"
+
+  fail-on-empty-true:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Prepare .dockerignore
+        run: |
+          printf '%s\n' '.ci-secrets' > .dockerignore
+
+      - name: Run action with empty value (expect failure)
+        id: act
+        continue-on-error: true
+        uses: ./
+        with:
+          owner: "${{ runner.uid }}:${{ runner.gid }}"
+          fail_on_empty: "true"
+          pairs: |
+            empty=
+
+      - name: Assert failed
+        run: |
+          test "${{ steps.act.outcome }}" = "failure"
+
+  allow-empty-when-disabled:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Prepare .dockerignore
+        run: |
+          printf '%s\n' '.ci-secrets' > .dockerignore
+
+      - name: Run action with empty value (should succeed)
+        uses: ./
+        with:
+          owner: "${{ runner.uid }}:${{ runner.gid }}"
+          fail_on_empty: "false"
+          pairs: |
+            empty=
+
+      - name: Assert empty file exists
+        run: |
+          set -euo pipefail
+          test -f .ci-secrets/empty
+          test "$(wc -c < .ci-secrets/empty)" -eq 0

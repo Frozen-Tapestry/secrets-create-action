@@ -1,0 +1,87 @@
+name: project-secrets-create
+description: "Writes secrets to a directory"
+branding:
+  icon: lock
+  color: gray-dark
+inputs:
+  pairs:
+    description: |
+      Multiline list of key=value lines.
+      key becomes filename under the secret dir.
+      Example:
+        nexus_user=${{ secrets.NEXUS_USER }}
+        nexus_password=${{ secrets.NEXUS_PASSWORD }}
+    required: true
+  dir:
+    description: "Directory to write secret files into"
+    required: false
+    default: ".ci-secrets"
+  owner:
+    description: "chown owner:group to apply to dir and files"
+    required: false
+    default: "1000:1000"
+  fail_on_empty:
+    description: "Fail if any value is empty"
+    required: false
+    default: "true"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Prepare build secrets
+      shell: /bin/bash --noprofile --norc -euo pipefail {0}
+      env:
+        # We map the input to an env var to avoid a shell quote injection
+        INPUT_PAIRS: ${{ inputs.pairs }}
+      run: |
+        # 1. Check .dockerignore
+        if [[ ! -f .dockerignore ]]; then
+          echo ".dockerignore not found"
+          exit 1
+        fi
+        dir='${{ inputs.dir }}'
+        case "$dir" in
+          /*|*..* ) echo "Refusing unsafe dir path: $dir"; exit 1 ;;
+        esac
+        grep -qxF "$dir" .dockerignore || { echo "Secrets ignore does not exist"; exit 1; }
+
+        # 2. Setup directory
+        umask 077
+        mkdir -p "$dir"
+
+        fail_on_empty='${{ inputs.fail_on_empty }}'
+        fail_on_empty="${fail_on_empty,,}"  # to lowercase
+
+        # 3. Parse secrets from env var
+        while IFS= read -r line; do
+          # Remove leading/trailing whitespace from the whole line (optional)
+          line="${line#"${line%%[![:space:]]*}"}"
+          line="${line%"${line##*[![:space:]]}"}"
+          [[ -z "$line" ]] && continue
+          [[ "$line" =~ ^# ]] && continue
+          
+          if [[ "$line" =~ ^([^=[:space:]]+)[[:space:]]*=(.*)$ ]]; then
+            key="${BASH_REMATCH[1]}"
+            val="${BASH_REMATCH[2]}"
+          else
+            echo "Invalid pairs line (missing '='): $line"
+            exit 1
+          fi
+          
+          # Security: Strict filename validation
+          if [[ ! "$key" =~ ^[A-Za-z0-9._-]+$ ]]; then
+            echo "Invalid key/filename: $key"
+            exit 1
+          fi
+
+          if [[ "$fail_on_empty" == "true" && -z "$val" ]]; then
+            echo "Empty secret value for: $key"
+            exit 1
+          fi
+
+          printf '%s' "$val" > "$dir/$key"
+        done <<< "$INPUT_PAIRS"
+
+        # 4. Secure Ownership
+        owner='${{ inputs.owner }}'
+        chown "$owner" "$dir" "$dir"/*
