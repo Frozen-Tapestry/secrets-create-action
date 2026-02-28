@@ -350,3 +350,48 @@ jobs:
           set -euo pipefail
           test -f .ci-secrets/empty
           test "$(wc -c < .ci-secrets/empty)" -eq 0
+
+  success-no-secret-entries:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Prepare .dockerignore
+        run: |
+          printf '%s\n' '.ci-secrets' > .dockerignore
+
+      - name: Run action with comment-only pairs (should succeed)
+        uses: ./
+        with:
+          owner: "${{ runner.uid }}:${{ runner.gid }}"
+          pairs: |
+            # intentionally empty
+
+      - name: Assert directory exists and no files were created
+        run: |
+          set -euo pipefail
+          test -d .ci-secrets
+          test -z "$(find .ci-secrets -mindepth 1 -maxdepth 1 -print -quit)"
+
+  fail-invalid-fail-on-empty:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Prepare .dockerignore
+        run: |
+          printf '%s\n' '.ci-secrets' > .dockerignore
+
+      - name: Run action with invalid fail_on_empty value (expect failure)
+        id: act
+        continue-on-error: true
+        uses: ./
+        with:
+          owner: "${{ runner.uid }}:${{ runner.gid }}"
+          fail_on_empty: "maybe"
+          pairs: |
+            a=b
+
+      - name: Assert failed
+        run: |
+          test "${{ steps.act.outcome }}" = "failure"

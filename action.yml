@@ -34,24 +34,36 @@ runs:
       env:
         # We map the input to an env var to avoid a shell quote injection
         INPUT_PAIRS: ${{ inputs.pairs }}
+        INPUT_DIR: ${{ inputs.dir }}
+        INPUT_OWNER: ${{ inputs.owner }}
+        INPUT_FAIL_ON_EMPTY: ${{ inputs.fail_on_empty }}
       run: |
         # 1. Check .dockerignore
         if [[ ! -f .dockerignore ]]; then
           echo ".dockerignore not found"
           exit 1
         fi
-        dir='${{ inputs.dir }}'
+        dir="$INPUT_DIR"
         case "$dir" in
-          /*|*..* ) echo "Refusing unsafe dir path: $dir"; exit 1 ;;
+          ""|/*|*..* ) echo "Refusing unsafe dir path: $dir"; exit 1 ;;
         esac
-        grep -qxF "$dir" .dockerignore || { echo "Secrets ignore does not exist"; exit 1; }
+        grep -qxF -- "$dir" .dockerignore || { echo "Secrets ignore does not exist"; exit 1; }
 
         # 2. Setup directory
         umask 077
-        mkdir -p "$dir"
+        mkdir -p -- "$dir"
 
-        fail_on_empty='${{ inputs.fail_on_empty }}'
+        fail_on_empty="$INPUT_FAIL_ON_EMPTY"
         fail_on_empty="${fail_on_empty,,}"  # to lowercase
+        case "$fail_on_empty" in
+          true|false) ;;
+          *)
+            echo "Invalid fail_on_empty value: '$INPUT_FAIL_ON_EMPTY' (expected true or false)"
+            exit 1
+            ;;
+        esac
+
+        written_files=()
 
         # 3. Parse secrets from env var
         write_secret() {
@@ -70,6 +82,7 @@ runs:
           fi
 
           printf '%s' "$val" > "$dir/$key"
+          written_files+=("$dir/$key")
         }
 
         heredoc_key=""
@@ -121,5 +134,13 @@ runs:
         fi
 
         # 4. Secure Ownership
-        owner='${{ inputs.owner }}'
-        chown "$owner" "$dir" "$dir"/*
+        owner="$INPUT_OWNER"
+        if [[ -z "$owner" ]]; then
+          echo "owner input must not be empty"
+          exit 1
+        fi
+        if (( ${#written_files[@]} > 0 )); then
+          chown -- "$owner" "$dir" "${written_files[@]}"
+        else
+          chown -- "$owner" "$dir"
+        fi

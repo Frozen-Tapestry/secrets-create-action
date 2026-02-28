@@ -108,7 +108,7 @@ This is a guardrail to reduce accidental inclusion of secret files in Docker bui
 * Filenames are validated and restricted to `A-Za-z0-9._-` to reduce the risk of path traversal or unexpected filesystem behavior.
 * Files are written with `printf '%s'` (no trailing newline added).
 * Directory and files are created under `umask 077` (owner-only by default).
-* `chown` runs on the directory and all files. If no files are created, `chown "$dir"/*` may fail; ensure `pairs` produces at least one file.
+* `chown` runs on the directory and any files that were created.
 
 ## License
 
